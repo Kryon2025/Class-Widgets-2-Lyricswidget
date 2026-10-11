@@ -375,12 +375,20 @@ class Plugin(CW2Plugin):
         # 换歌后开始计时；宽限期到点仍一行歌词都没有，就认定「无歌词 / 纯音乐」。
         # 真正的判定在 _get_lyrics_absent()：行数为 0 且宽限期已过，二者同时成立才算。
         self._lyrics_grace_expired = False
-        self._lyrics_grace_ms = 4000
+        # 30s：避开「换歌 → 歌词推送到达」的空窗。原为 4s，实测偏短，
+        # 无词时组件会过早隐藏（换歌瞬间闪一下）。
+        self._lyrics_grace_ms = 30000
         from PySide6.QtCore import QTimer as _QTimer
         self._lyrics_grace = _QTimer(self)
         self._lyrics_grace.setSingleShot(True)
         self._lyrics_grace.setInterval(self._lyrics_grace_ms)
         self._lyrics_grace.timeout.connect(self._on_lyrics_grace_timeout)
+        # 计时器原先只在「换歌」时启动（_on_track_changed）。
+        # 若插件加载时已在播放、且这首歌没有歌词，就不会有任何换歌事件，
+        # 计时器永不启动 -> _lyrics_grace_expired 恒为 False -> 组件永不隐藏。
+        # 这里在启动时也起一次；有词时 _on_lyrics_grace_timeout 会先查
+        # model.count()，不会误判。
+        self._lyrics_grace.start()
         self.server: Optional[HTTPServerWithStop] = None
         self._server_thread: Optional[threading.Thread] = None
 
