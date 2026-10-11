@@ -64,27 +64,39 @@ SettingsLayout {
         title: "封面背景"
         description: "从系统媒体会话（SMTC）读取当前歌曲的专辑封面，模糊后作为组件背景。"
 
-        Switch {
-            checked: root.showCoverValue
-            onCheckedChanged: root.showCoverValue = checked
-        }
-
-        RowLayout {
+        // SettingCard 只接受一个内容子项：两个控件必须包进同一个 ColumnLayout，
+        // 否则第二个子项会顶掉第一个，表现为整张卡都调不动。
+        ColumnLayout {
+            Layout.fillWidth: true
             spacing: 8
-            Button {
-                text: "−"
-                implicitWidth: 36
-                onClicked: bgOpacityValue = Math.max(0, bgOpacityValue - 5)
+
+            Switch {
+                checked: root.showCoverValue
+                onCheckedChanged: root.showCoverValue = checked
             }
-            Text {
-                Layout.preferredWidth: 80
-                horizontalAlignment: Text.AlignHCenter
-                text: bgOpacityValue + "%"
-            }
-            Button {
-                text: "+"
-                implicitWidth: 36
-                onClicked: bgOpacityValue = Math.min(100, bgOpacityValue + 5)
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("背景透明度")
+                }
+                Button {
+                    text: "−"
+                    implicitWidth: 36
+                    onClicked: bgOpacityValue = Math.max(0, bgOpacityValue - 5)
+                }
+                Text {
+                    Layout.preferredWidth: 56
+                    horizontalAlignment: Text.AlignHCenter
+                    text: bgOpacityValue + "%"
+                }
+                Button {
+                    text: "+"
+                    implicitWidth: 36
+                    onClicked: bgOpacityValue = Math.min(100, bgOpacityValue + 5)
+                }
             }
         }
     }

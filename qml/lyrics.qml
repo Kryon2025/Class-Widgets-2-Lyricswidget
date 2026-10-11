@@ -334,7 +334,16 @@ Widget {
                 readonly property int fs: (cell.isCur || cell.isTrans) ? root.mainSize : root.subSize
                 readonly property var tokens: root.tokenize((lineText !== undefined) ? lineText : "")
                 readonly property int tokenCount: tokens.length
-                readonly property real textW: tokenRow.width
+                // 用 TextMetrics 按当前字号实测宽度，而不是读 tokenRow 的布局宽度：
+                // 布局宽度会滞后于字号变化（字号改了判定不动，要硬超出很多才滚动）。
+                readonly property real measuredW: textMetrics.advanceWidth
+                readonly property real textW: Math.max(tokenRow.width, measuredW)
+                TextMetrics {
+                    id: textMetrics
+                    font.pixelSize: cell.fs
+                    font.weight: Font.DemiBold
+                    text: cell.tokens.join("")
+                }
                 readonly property bool overflow: textW >= cell.width - 1
                 // 横向滚动：当前句必须在本句时长内滚完（留 700ms 起滚缓冲）
                 readonly property int marqueeMs: cell.isCur
@@ -488,6 +497,10 @@ Widget {
                 }
                 onTextWChanged: relayout()
                 onWidthChanged: relayout()
+                // 字号变化必须直接重跑一次启停判定：overflow 虽是实时绑定，
+                // 但 relayout() 是带副作用的（启停动画、归位 x），它不重跑就停在旧状态。
+                onFsChanged: relayout()
+                onMeasuredWChanged: relayout()
                 onIsCurChanged: startKaraoke()
                 Component.onCompleted: {
                     relayout()

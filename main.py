@@ -40,7 +40,7 @@ def _data_dir() -> Path:
     专辑封面缓存和上一次的播放状态会跟着消失。
     """
     try:
-        d = Path(__file__).resolve().parent.parent.parent / "configs" / "plugins" / "com.lyriswidget"
+        d = Path(__file__).resolve().parent.parent.parent / "configs" / "plugins" / "com.lyricswidget"
         d.mkdir(parents=True, exist_ok=True)
         return d
     except Exception:
@@ -69,10 +69,10 @@ def _restore_winrt_native() -> None:
                 shutil.copy2(stash, target)
                 restored.append(target.name)
         if restored and log is not None:
-            log.info(f"[lyriswidget] 已还原 winrt 原生模块: {' '.join(restored)}")
+            log.info(f"[lyricswidget] 已还原 winrt 原生模块: {' '.join(restored)}")
     except Exception as e:                                  # noqa: BLE001
         if log is not None:
-            log.warning(f"[lyriswidget] 还原 winrt 原生模块失败: {e}")
+            log.warning(f"[lyricswidget] 还原 winrt 原生模块失败: {e}")
 
 
 _restore_winrt_native()
@@ -93,7 +93,7 @@ except ImportError:  # pragma: no cover
     netease_lyrics = None
 
 # 常量定义
-WIDGET_ID = "com.lyriswidget"
+WIDGET_ID = "com.lyricswidget"
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 50063
 
@@ -216,6 +216,24 @@ class LyricListModel(QAbstractListModel):
         self._rows[i] = {"text": str(text), "kind": kind, "extra_kind": extra_kind}
         idx = self.index(i, 0)
         self.dataChanged.emit(idx, idx, [self.LineRole, self.KindRole, self.ExtraKindRole])
+
+    def reclassify_extra(self, text, extra_kind):
+        """把内容匹配的附加行重新分类（回溯纠正用）。
+
+        附加行是"译文"还是"下一句"只能靠猜，猜错会让它套上错误的字号。
+        但"下一句"必然会以 lyric 身份再出现一次 —— 那一刻就是确定性判据。
+        按内容匹配而不是记行号：中间可能发生过 trim_after，记行号会改错行。
+        """
+        changed = False
+        for i, row in enumerate(self._rows):
+            if (row["kind"] == "extra" and row["text"] == str(text)
+                    and row["extra_kind"] != extra_kind):
+                self._rows[i] = {"text": row["text"], "kind": "extra",
+                                 "extra_kind": extra_kind}
+                idx = self.index(i, 0)
+                self.dataChanged.emit(idx, idx, [self.ExtraKindRole])
+                changed = True
+        return changed
 
     def trim_after(self, i):
         if i + 1 < len(self._rows):
@@ -351,6 +369,7 @@ class Plugin(CW2Plugin):
         _backend = self
         self._lyric = ""
         self._extra = ""
+        self._last_footer = ""     # 上一条附加行的内容，供回溯确认"下一句"
         self._status = "waiting"
         # —— 「没有歌词就隐藏」的判定状态（纯歌词侧，刻意不掺 SMTC）——
         # 换歌后开始计时；宽限期到点仍一行歌词都没有，就认定「无歌词 / 纯音乐」。
@@ -574,7 +593,7 @@ class Plugin(CW2Plugin):
     @Slot(dict)
     def _apply_post(self, payload):
         try:
-            logger.info(f"[lyriswidget] payload: {payload}")
+            logger.info(f"[lyricswidget] payload: {payload}")
             _data_dir().joinpath("last_payload.json").write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -584,6 +603,14 @@ class Plugin(CW2Plugin):
         extra = _first(payload, "extra", "translation", "trans", "sub")
         nxt = _first(payload, "next", "nextLyric", "next_line")
         footer = nxt or extra
+
+        # 回溯确认：上一条被判成"译文"的附加行，如果现在以歌词身份出现，
+        # 它本来就是"下一句"。这是确定性判据（不是猜测），立即回头改对。
+        if cur and self._last_footer and cur.strip() == self._last_footer.strip():
+            if self._model.reclassify_extra(self._last_footer, "next"):
+                self.linesDirty.emit()
+                self.lyricsChanged.emit()
+            self._last_footer = ""
 
         if cur:
             self._recent.append((time.monotonic(), cur, extra))
@@ -663,9 +690,22 @@ class Plugin(CW2Plugin):
             self.lyricsChanged.emit()
 
         # 3) 附加行：区分"译文"与"下一句"
+        #    判定按可信度排序：
+        #      ① 发送端显式给了 next / nextLyric / next_line → 就是下一句，不必猜
+        #      ② 值来自 translation / trans / sub 这类明确表示译文的键 → 就是译文
+        #      ③ 只有通用的 extra 键时才退回"脚本差异"猜测
+        #    原来一律走 ③：中文歌配英文下一句（两边脚本不同）会被判成译文，
+        #    附加行于是套上主字号，看起来和当前句一起被加粗。
         if footer and cur:
             self._extra = footer
-            ekind = "trans" if _is_translation(cur, footer) else "next"
+            self._last_footer = footer
+            explicit_trans = _first(payload, "translation", "trans", "sub")
+            if nxt:
+                ekind = "next"
+            elif explicit_trans and explicit_trans == extra:
+                ekind = "trans"
+            else:
+                ekind = "trans" if _is_translation(cur, footer) else "next"
             ni = self._idx + 1
             if ni < self._model.count():
                 self._model.set_row(ni, footer, "extra", ekind)
@@ -792,7 +832,7 @@ class Plugin(CW2Plugin):
             self._smtc.thumbnail.connect(self._on_thumbnail)
             self._smtc.start()
         except Exception as e:
-            logger.error(f"[lyriswidget] SMTC 启动失败: {e}")
+            logger.error(f"[lyricswidget] SMTC 启动失败: {e}")
             self._smtc = None
 
     def _stop_smtc(self):
@@ -800,7 +840,7 @@ class Plugin(CW2Plugin):
             try:
                 self._smtc.stop()
             except Exception as e:
-                logger.error(f"[lyriswidget] SMTC 停止失败: {e}")
+                logger.error(f"[lyricswidget] SMTC 停止失败: {e}")
             self._smtc = None
 
     @Slot(bool)
@@ -931,7 +971,7 @@ class Plugin(CW2Plugin):
             if best is not None and best_score >= 3.6:
                 dur = int(best.get("duration") or 0)
         except Exception as e:
-            logger.debug(f"[lyriswidget] duration lookup failed: {e}")
+            logger.debug(f"[lyricswidget] duration lookup failed: {e}")
         self._durFound.emit(title, artist, dur)
 
     def _on_thumbnail(self, title, data):
@@ -961,7 +1001,7 @@ class Plugin(CW2Plugin):
                             light=self._cover_is_light)
             self.coverChanged.emit()
         except Exception as e:
-            logger.debug(f"[lyriswidget] 处理封面失败: {e}")
+            logger.debug(f"[lyricswidget] 处理封面失败: {e}")
 
     @Slot(str, str, int)
     def _on_duration_found(self, title, artist, dur):
@@ -1013,7 +1053,7 @@ class Plugin(CW2Plugin):
         )
         self._start_server()
         self._start_smtc()
-        print(f"[lyriswidget] 插件已加载，服务端口 {SERVER_PORT}")
+        print(f"[lyricswidget] 插件已加载，服务端口 {SERVER_PORT}")
 
     def on_unload(self):
         global _backend
@@ -1021,7 +1061,7 @@ class Plugin(CW2Plugin):
         self._stop_server()
         if _backend is self:
             _backend = None
-        print("[lyriswidget] 插件已卸载")
+        print("[lyricswidget] 插件已卸载")
 
     # ---- HTTP 服务 ----
     def _start_server(self):
