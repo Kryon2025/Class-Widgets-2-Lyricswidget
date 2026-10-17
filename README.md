@@ -13,7 +13,7 @@
 </div>
 
 > [!NOTE]
-> 当前版本 **1.1.1**，要求 Class Widgets 2 的插件 API `~=0.6.0`。
+> 当前版本 **1.1.1**，要求 Class Widgets 2 的插件 API `~=0.7.0`。
 > 在 [插件广场](https://plaza.cw.rinlit.cn/plugins/com.lyricsisland) 可以一键安装/更新，也可以在 Release 页下载 `.cwplugin` 手动导入。
 
 音乐软件侧向本地 `127.0.0.1:50063` 推送歌词，组件居中显示「上一句 / 当前句 / 附加行」三行；
@@ -38,7 +38,7 @@
 
 ### 稳健性
 - **SMTC 核验闸门**：只有当 SMTC 与歌词渠道确认是**同一首歌**时才启用 SMTC 功能；否则停用相关功能并释放封面等占用，只保留歌词自身能提供的效果
-- **自动显隐**：暂停/停止约 10 秒后自动收起，恢复播放或收到新歌词立即弹出
+- **自动显隐**：暂停或停止播放后约 45 秒自动收起（判据是「多久没收到歌词推送」，不看播放器状态）；恢复播放或收到新歌词立即弹出
 - **优雅降级**：没有 SMTC、没有封面、没有时长时都能正常工作
 
 ## 📦 安装
@@ -207,5 +207,20 @@ com.lyricsisland/
 
 ## SDK 版本
 
-本插件适配 Class Widgets 2 SDK **0.6.0**（`cwplugin.json` 中 `api_version: ~=0.6.0`），
+本插件适配 Class Widgets 2 SDK **0.7.0**（`cwplugin.json` 中 `api_version: ~=0.7.0`），
 使用官方 `ClassWidgets.SDK` 接口（`CW2Plugin` / `PluginAPI`）。
+
+## 已知问题
+
+### 组件框隐藏后恢复显示时被裁剪
+
+**现象**：组件隐藏后再显示，组件框尺寸不对，内容被裁掉一截；用鼠标点一下组件，重新排版后恢复正常。
+
+**原因在主程序，不在本插件。**
+主程序 `BaseWidget.qml` 里宽度是实时计算的：
+`implicitWidth: Math.max(headerRow.implicitWidth, visibleContentWidth()) + 48`，
+同时挂了 `Behavior on implicitWidth`，缓动是 `liquidBack`（带回弹，会冲过目标值再弹回来）。
+层从隐藏恢复时宽度从旧值弹向新值并过冲，期间读到的是中间态，内容就按错误宽度排版了。
+
+**插件侧无法修复**：宽度由基类计算并掌控，修改 `width` / `visible` / `opacity` 都在这套计算的下游。
+等主程序处理——层恢复时禁用该 `Behavior`，或换成不过冲的缓动。
