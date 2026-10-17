@@ -383,6 +383,18 @@ class Plugin(CW2Plugin):
         self._lyrics_grace.setSingleShot(True)
         self._lyrics_grace.setInterval(self._lyrics_grace_ms)
         self._lyrics_grace.timeout.connect(self._on_lyrics_grace_timeout)
+
+        # —— 推送看门狗：LyricsIsland 停播时不再推任何东西，靠「多久没收到推送」
+        # 判断是否已经没在播放。纯歌词侧，不掺 SMTC（与显隐设计意图一致）。
+        self._last_post_at = 0.0
+        self._post_stalled = False
+        # 45s 没收到任何推送即认定停播。取值偏宽松：歌词行间隔最长也就几秒，
+        # 留足余量避免长间奏被误判成停播。要更灵敏就调小。
+        self._post_stall_ms = 45000
+        self._push_watch = _QTimer(self)
+        self._push_watch.setInterval(5000)
+        self._push_watch.timeout.connect(self._on_push_watch)
+        self._push_watch.start()
         # 计时器原先只在「换歌」时启动（_on_track_changed）。
         # 若插件加载时已在播放、且这首歌没有歌词，就不会有任何换歌事件，
         # 计时器永不启动 -> _lyrics_grace_expired 恒为 False -> 组件永不隐藏。
@@ -600,6 +612,10 @@ class Plugin(CW2Plugin):
     # ---- 主线程：处理歌词推送 ----
     @Slot(dict)
     def _apply_post(self, payload):
+        # 看门狗用：记下最近一次收到歌词推送的时刻。
+        # LyricsIsland 停播时【什么也不推】，没有这个时间戳就无从判断「已经没在放了」。
+        self._last_post_at = time.monotonic()
+        self._post_stalled = False
         try:
             logger.info(f"[lyricswidget] payload: {payload}")
             _data_dir().joinpath("last_payload.json").write_text(
@@ -636,7 +652,6 @@ class Plugin(CW2Plugin):
             # 歌词侧检测到换歌 → 清掉上一首残留，重新开始等新歌词。
             # 这一步是「没有歌词就隐藏」能生效的前提：不清空的话
             # 上一首的行会一直留在模型里，hasLyrics 恒为真，永远不隐藏。
-            self._begin_lyrics_wait()
             self.lyricsChanged.emit()
             self.progressTick.emit()
             return
@@ -772,6 +787,29 @@ class Plugin(CW2Plugin):
             pass
         self.lyricsChanged.emit()
         self.linesDirty.emit()
+
+    def _on_push_watch(self):
+        """太久没收到歌词推送 -> 认定已停播，清词并判定无词。
+
+        只在「从有推送变成长时间无推送」时动手一次，靠 _post_stalled 去重；
+        一旦又有新推送，_apply_post 会把标志复位。
+        """
+        if not self._last_post_at:
+            return
+        if self._post_stalled:
+            return
+        import time as _t
+        if (_t.monotonic() - self._last_post_at) * 1000 < self._post_stall_ms:
+            return
+        self._post_stalled = True
+        try:
+            if self._model.count() > 0:
+                self._model.reset_rows([])
+                self._idx = 0
+        except Exception:
+            pass
+        self._mark_no_lyrics("empty")
+        self._debug_log("push_stalled")
 
     def _on_lyrics_grace_timeout(self):
         """换歌后等满宽限期，仍然一行歌词都没有 → 判定无歌词。"""
